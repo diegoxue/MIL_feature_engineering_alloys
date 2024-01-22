@@ -1,20 +1,24 @@
+from __future__ import annotations
 import random
 import copy
 from typing import List, Tuple
 
+import joblib
 import numpy as np
 import pandas as pd
 from sklearn import preprocessing
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import KFold, cross_val_score
+from sklearn.base import clone
+from sklearn.metrics import r2_score
 
+''' This import can be replaced by a in-file func definition '''
 from func_utils import get_random_forest
 
-import joblib
-
+''' golbal variables '''
 # feature number
 F_N = 6
 # thread number
-THREAD_N = 6
+THREAD_N = 10
 # number of parallel jobs in cross validation
 JOBS_N = 2
 # number of splits for cross validation
@@ -25,11 +29,16 @@ class Env:
         Environment for feature selection of strain data.
     '''
     def __init__(self) -> None:
+        '''
+            Environment initialization.
+            The first 5 lines can be modified according to specific purpose.
+        '''
         initial_dataset_path = 'Strain_final_118_checked_by_Xue_20240110.xlsx'
         data = pd.read_excel(initial_dataset_path, index_col = 0)
         _elem_names = data.columns.values.tolist()[:16]
         self.prop_name = data.columns.values.tolist()[16]
         self.feature_name = data.columns.values.tolist()[17:]
+
 
         self.prop_val = data[self.prop_name].values
         self.feature_val = data[self.feature_name].values
@@ -37,15 +46,44 @@ class Env:
         self.model = get_random_forest()
         self.scaler = preprocessing.RobustScaler()
     
-    def _cross_validation(self, x, y):
+    def __skl_cross_validation(self, x, y) -> float:
+        '''
+            10-fold cross validation using sklearn.
+
+            NOTE: deprecated. shift to custom cross validation.
+        '''
         scores = cross_val_score(self.model, x, y, cv = SPLITS_N, scoring = 'r2', n_jobs = JOBS_N)
         return scores.mean()
 
-    def calculate_fitness(self, feature_idx_list: List[int]):
-        '''' TODO: change input variable type to Individual '''
+    def __custom_cross_validation(self, x, y) -> float:
+        ''' 
+            Custom 10-fold cross validation.
+        '''
+        assert len(x) == len(y)
+
+        model = clone(self.model)
+        scaler = preprocessing.RobustScaler()
+        x = scaler.fit_transform(x)
+        kf = KFold(SPLITS_N, shuffle = True)
+
+        y_test_buff, y_pred_buff = [], []
+        for train_index, test_index in kf.split(x):
+            X_train, X_test = x[train_index], x[test_index]
+            y_train, y_test = y[train_index], y[test_index]
+
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+
+            y_test_buff += y_test.tolist()
+            y_pred_buff += y_pred.tolist()
+
+        return r2_score(y_test_buff, y_pred_buff)
+
+    def calculate_fitness(self, ind: Individual):
+        '''' calculate fitness of an individual '''
         # return random.random()  # for debug
 
-        feature_idx_list = np.asarray(feature_idx_list, dtype = np.int32)
+        feature_idx_list = np.asarray(ind.f_idx_list, dtype = np.int32)
 
         assert len(feature_idx_list) == F_N
         assert len(set(feature_idx_list)) == F_N
@@ -53,7 +91,7 @@ class Env:
         
         x = self.feature_val[:, feature_idx_list]
         x = self.scaler.fit_transform(x)
-        fitness = self._cross_validation(x, self.prop_val)
+        fitness = self.__custom_cross_validation(x, self.prop_val)
         
         return fitness
     
@@ -186,7 +224,7 @@ class FeatureSelectionGA:
 
     def par_eval(self, pop: List[Individual]) -> List[float]:
         ''' parallel evaluation of fitness '''
-        fitnesses = joblib.Parallel(n_jobs=THREAD_N)(joblib.delayed(self.env.calculate_fitness)(x.f_idx_list) for x in pop)
+        fitnesses = joblib.Parallel(n_jobs=THREAD_N)(joblib.delayed(self.env.calculate_fitness)(x) for x in pop)
         return fitnesses
 
     def generate(self, n_pop, cxpb=0.5, mutxpb=0.2, ngen=5):
@@ -222,7 +260,6 @@ class FeatureSelectionGA:
 
         # Evaluate the entire population
         print("EVOLVING.......")
-        # fitnesses = list(map(lambda x: self.env.calculate_fitness(x.f_idx_list), pop))
         fitnesses = self.par_eval(pop)
 
         for ind, fit in zip(pop, fitnesses):
@@ -245,7 +282,6 @@ class FeatureSelectionGA:
                 new_individuals.append(mutate(ind, mutxpb, self.env.total_f_N))
 
             # Evaluate the new individuals
-            # fitnesses = list(map(lambda x: self.env.calculate_fitness(x.f_idx_list), new_individuals))
             fitnesses = self.par_eval(new_individuals)
             for ind, fit in zip(new_individuals, fitnesses):
                 ind.fitness = fit
@@ -288,5 +324,5 @@ class FeatureSelectionGA:
 if __name__ == "__main__":
     env = Env()
     ga = FeatureSelectionGA(env, verbose = 1)
-    ga.generate(n_pop = 200, cxpb = 0.8, mutxpb = 0.1, ngen = 100)
+    ga.generate(n_pop = 200, cxpb = 0.8, mutxpb = 0.1, ngen = 50)
     ga.save_dominants_buffer('dominants_buffer.pkl')
