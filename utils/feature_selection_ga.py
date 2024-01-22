@@ -1,5 +1,6 @@
 import random
-from typing import List
+import copy
+from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -12,8 +13,10 @@ import joblib
 
 # feature number
 F_N = 6
-# number of parallel jobs
-JOBS_N = 5
+# thread number
+THREAD_N = 6
+# number of parallel jobs in cross validation
+JOBS_N = 2
 # number of splits for cross validation
 SPLITS_N = 10
 
@@ -39,6 +42,9 @@ class Env:
         return scores.mean()
 
     def calculate_fitness(self, feature_idx_list: List[int]):
+        '''' TODO: change input variable type to Individual '''
+        # return random.random()  # for debug
+
         feature_idx_list = np.asarray(feature_idx_list, dtype = np.int32)
 
         assert len(feature_idx_list) == F_N
@@ -57,10 +63,11 @@ class Env:
 
 class Individual:
     def __init__(self, f_idx_list: List[int]):
-        self.f_idx_list = f_idx_list
+        ''' feature index list, type: List[int] '''
+        self.f_idx_list = np.array(f_idx_list)
         self.fitness = None
 
-def init_individual(total_f_num: int, f_num: int):
+def init_individual(total_f_num: int, f_num: int) -> Individual:
     """
         Generate an individual.
 
@@ -71,107 +78,118 @@ def init_individual(total_f_num: int, f_num: int):
     f_idx_list = random.sample(range(total_f_num), f_num)
     return Individual(f_idx_list)
 
-def mutate(individual: Individual, total_f_num: int):
-    """
-        Mutate an individual by replacing one of its attribute with a random integer value, in place.
-
-        :param individual: The individual to be mutated.
-        :return: A mutated individual.
-    """
-    f_idx_list = individual.f_idx_list
-    mutate_pos = random.randint(0, len(f_idx_list) - 1)
-    mutate_val = random.choice(set(range(total_f_num)) - set(f_idx_list))
-    f_idx_list[mutate_pos] = mutate_val
-    return individual
-
-def cross_over(individual_1: Individual, individual_2: Individual, crx_pb: float = 0.25):
-    """
-        Cross over two individuals.
-
-        :param individual1: The first individual.
-        :param individual2: The second individual.
-        :return: Two crossed individuals.
-    """
-    f_idx_list_1 = individual_1.f_idx_list
-    f_idx_list_2 = individual_2.f_idx_list
-    cross_pos = random.randint(0, len(f_idx_list_1) - 1)
-    if random.random() < crx_pb and f_idx_list_1[cross_pos] != f_idx_list_2[cross_pos]:
-        f_idx_list_1[cross_pos], f_idx_list_2[cross_pos] = f_idx_list_2[cross_pos], f_idx_list_1[cross_pos]
-    return individual_1, individual_2
+def softmax(x: List[float]) -> np.ndarray:
+    """Compute softmax values for each sets of scores in x."""
+    e_x = np.exp(x - np.max(x))  # subtract max(x) for numerical stability
+    return e_x / e_x.sum()
 
 def select(population: List[Individual], k: int) -> List[Individual]:
     """
-        Select the best individuals from a population.
+        Select the individuals from a population.
+
+        轮盘赌选择(Roulette Wheel Selection)
+        在这种方法中，每个个体被选中的概率与其适应度函数值的大小成正比。
+        具体来说，每个个体的选择概率等于其适应度函数值除以所有个体适应度函数值的总和。
+        这种方法更倾向于选择适应度高的个体，但也给适应度低的个体留下了一定的选择机会。
 
         :param population: The population.
         :param k: The number of individuals to select.
         :return: The selected individuals.
     """
-    _POOL_SIZE = 3
-    assert _POOL_SIZE <= len(population)
-    selected_pop = []
-    for _ in range(k):
-        selected_pop.append(
-            max(random.sample(population, _POOL_SIZE), key = lambda individual: individual.fitness)
-        )
-    return selected_pop
+    fitness_sum = sum(individual.fitness for individual in population)
+    probabilities = [individual.fitness / fitness_sum for individual in population]
+    ''' fitness defined as r2 can be negative, need to normalize it to [0, 1] '''
+    probabilities = softmax(probabilities)
+    return random.choices(population, weights = probabilities, k = k)
+
+def mutate(parent: Individual, mutation_prob: float, total_f_num: int) -> Individual:
+    """
+        Mutate an individual by replacing one of its attribute with a random integer value.
+
+        :param individual: The individual to be mutated.
+        :return: A new mutated individual.
+    """
+    f_idx_list = copy.deepcopy(parent.f_idx_list)
+    mutate_pos = [i for i in range(len(f_idx_list)) if random.random() < mutation_prob]
+    mutate_val = random.sample(
+        list(set(range(total_f_num)) - set(f_idx_list)), 
+        len(mutate_pos)
+    )
+    f_idx_list[mutate_pos] = mutate_val
+    return Individual(f_idx_list)
+
+def cross_over(parent_1: Individual, parent_2: Individual, crx_pb: float = 0.25) -> Tuple[Individual, Individual]:
+    """
+        Cross over two individuals.
+
+        :param individual1: The first individual.
+        :param individual2: The second individual.
+        :return: Two new crossed individuals.
+    """
+    f_idx_list_1 = copy.deepcopy(parent_1.f_idx_list)
+    f_idx_list_2 = copy.deepcopy(parent_2.f_idx_list)
+    only_in_1 = list(set(f_idx_list_1) - set(f_idx_list_2))
+    only_in_2 = list(set(f_idx_list_2) - set(f_idx_list_1))
+    ''' shuffle '''
+    random.shuffle(only_in_1)
+    random.shuffle(only_in_2)
+    ''' cross over '''
+    new_f_idx_list_1 = list(set(f_idx_list_1) & set(f_idx_list_2)) + only_in_1
+    new_f_idx_list_2 = list(set(f_idx_list_1) & set(f_idx_list_2)) + only_in_2
+    for i in range(len(only_in_1)):
+        if random.random() < crx_pb:
+            new_f_idx_list_1[i], new_f_idx_list_2[i] = new_f_idx_list_2[i], new_f_idx_list_1[i]
+    return Individual(new_f_idx_list_1), Individual(new_f_idx_list_2)
+
+def elitism_replacement(population: List[Individual], offspring: List[Individual]):
+    """ Perform Elitism Replacement """
+    combined = population + offspring
+    combined.sort(key = lambda ind: ind.fitness, reverse = True)
+    return combined[:len(population)]
 
 class FeatureSelectionGA:
     """
-    FeaturesSelectionGA
-    This class uses Genetic Algorithm to find out the best features for an input model
-    using Distributed Evolutionary Algorithms in Python(DEAP) package. Default toolbox is
-    used for GA but it can be changed accordingly.
+        FeaturesSelectionGA
+        This class uses Genetic Algorithm to find out the best features for the given data.
+
+        遗传算法通常包含以下几个阶段:
+        初始化(Initialization):创建一个初始种群。这个种群通常是随机生成的。
+        评估(Evaluation):评估种群中每个个体的适应度。
+        选择(Selection):<根据每个个体的适应度来选择用于交叉的个体。适应度高的个体有更高的机会被选中。>
+        交叉(Crossover):从已经选择的个体中创建新的个体。这个过程模拟了生物的交配过程。
+        突变(Mutation):对新生成的个体进行随机的小修改，这个过程模拟了生物的突变过程。
+        替换(Replacement):用新生成的个体替换掉种群中的一部分或全部个体。
+        终止(Termination).
     """
 
-    def __init__(self, model, x, y, verbose = 0, ff_obj = None):
+    def __init__(self, ff_obj: Env, verbose: int = 0):
         """
         Parameters
         -----------
-        model : scikit-learn supported model,
-            x :  {array-like}, shape = [n_samples, n_features]
-                 Training vectors, where n_samples is the number of samples
-                 and n_features is the number of features.
-
-            y  : {array-like}, shape = [n_samples]
-                 Target Values
-        cv_split: int
-                 Number of splits for cross_validation to calculate fitness.
-
+        ff_obj: {object}, environment for feature selection
         verbose: 0 or 1
         """
-        self.model = model
-        self.n_features = x.shape[1]
-        self.x = x
-        self.y = y
         self.verbose = verbose
-        if self.verbose == 1:
-            print(
-                "Model {} will select best features among {} features.".format(
-                    model, x.shape[1]
-                )
-            )
-            print("Shape od train_x: {} and target: {}".format(x.shape, y.shape))
-        self.final_fitness = []             # NOTE
-        self.fitness_in_generation = {}     # NOTE
+        # self.final_fitness = []
+        self.dominants_buffer = {}
         self.best_ind = None
         if ff_obj == None:
-            self.env = Env()
+            raise ValueError("Please provide a valid environment.")
         else:
             self.env = ff_obj
 
-    def evaluate(self, individual: List[int]):
-        fitness = self.env.calculate_fitness(individual)
-
         if self.verbose == 1:
-            print("Individual: {}  Fitness_score: {} ".format(individual, fitness))
+            print(
+                "Will select best features among {} features.".format(self.env.feature_val.shape[1])
+            )
+            print("Shape od train_x: {} and target: {}".format(self.env.feature_val.shape, self.env.prop_val.shape))
 
-        return (fitness,)   
+    def par_eval(self, pop: List[Individual]) -> List[float]:
+        ''' parallel evaluation of fitness '''
+        fitnesses = joblib.Parallel(n_jobs=THREAD_N)(joblib.delayed(self.env.calculate_fitness)(x.f_idx_list) for x in pop)
+        return fitnesses
 
-    def get_final_scores(self, pop, fits):
-        self.final_fitness = list(zip(pop, fits))
-
-    def generate(self, n_pop, cxpb=0.5, mutxpb=0.2, ngen=5, set_toolbox=False):
+    def generate(self, n_pop, cxpb=0.5, mutxpb=0.2, ngen=5):
 
         """
         Generate evolved population
@@ -200,48 +218,63 @@ class FeatureSelectionGA:
                 )
             )
 
-        pop = [init_individual(self.env.total_f_N, self.env.feature_num) for _ in range(n_pop)]
-        CXPB, MUTPB, NGEN = cxpb, mutxpb, ngen
+        pop = [init_individual(self.env.total_f_N, F_N) for _ in range(n_pop)]
 
         # Evaluate the entire population
         print("EVOLVING.......")
-        fitnesses = list(map(self.env.calculate_fitness, pop))
+        # fitnesses = list(map(lambda x: self.env.calculate_fitness(x.f_idx_list), pop))
+        fitnesses = self.par_eval(pop)
 
         for ind, fit in zip(pop, fitnesses):
             ind.fitness = fit
 
-        for g in range(NGEN):
-            print("-- GENERATION {} --".format(g + 1))
-            selected_pop = select(pop, len(pop))
-            self.fitness_in_generation[str(g + 1)] = max(
-                [ind.fitness for ind in pop]
-            )
+        for g in range(ngen):
+            self.dominants_buffer[g] = max(pop, key = lambda ind: ind.fitness)
 
+            print(" GENERATION {} ".format(g + 1).center(25, '-'))
+            print("Best fitness: {}".format(self.dominants_buffer[g].fitness))
+            # self.review_pop(pop)
+
+            selected_pop = select(pop, len(pop) // 2)
+            new_individuals = []
             # Apply crossover and mutation on the offspring
-            for child1, child2 in zip(selected_pop[::2], selected_pop[1::2]):
-                if random.random() < CXPB:
-                    cross_over(child1, child2)
-                    child1.fitness = None
-                    child2.fitness = None
+            for ind_1, ind_2 in zip(selected_pop[::2], selected_pop[1::2]):     # TODO: check cross_over order
+                new_individuals += list(cross_over(ind_1, ind_2, cxpb))
 
-            for mutant in selected_pop:
-                if random.random() < MUTPB:
-                    mutate(mutant, self.env.total_f_N)
-                    mutant.fitness = None
+            for ind in selected_pop:
+                new_individuals.append(mutate(ind, mutxpb, self.env.total_f_N))
 
-            # Evaluate the individuals with an invalid fitness
-            weak_ind = [ind for ind in selected_pop if not ind.fitness]
-            fitnesses = list(map(self.env.calculate_fitness, weak_ind))
-            for ind, fit in zip(weak_ind, fitnesses):
-                ind.fitness = fit 
-            print("Evaluated %i individuals" % len(weak_ind))
+            # Evaluate the new individuals
+            # fitnesses = list(map(lambda x: self.env.calculate_fitness(x.f_idx_list), new_individuals))
+            fitnesses = self.par_eval(new_individuals)
+            for ind, fit in zip(new_individuals, fitnesses):
+                ind.fitness = fit
+            print("Evaluated %i new individuals" % len(new_individuals))
 
-            # The population is entirely replaced by the offspring
-            pop[:] = selected_pop                             
+            # replacement
+            pop = elitism_replacement(pop, new_individuals)                         
 
-            # Gather all the fitnesses in one list and print the stats
+        print("-- Only the fittest survives --")
+
+        self.best_ind = max(pop, key = lambda ind: ind.fitness)
+        print(
+            "Best individual is %s, %s" % (self.best_ind, self.best_ind.fitness)
+        )
+        # self.get_final_scores(pop, fits)
+
+        return pop
+
+    def save_dominants_buffer(self, file_name: str):
+        """
+            Save fitness in each generation in a file
+        """
+        joblib.dump(self.dominants_buffer, file_name)
+
+    def review_pop(self, pop: List[Individual]):
+        """
+            Review population by statistics
+        """
         fits = [ind.fitness for ind in pop]
-
         length = len(pop)
         mean = sum(fits) / length
         sum2 = sum(x * x for x in fits)
@@ -252,18 +285,8 @@ class FeatureSelectionGA:
             print("  Avg %s" % mean)
             print("  Std %s" % std)
 
-        print("-- Only the fittest survives --")
-
-        self.best_ind = max(pop, key = lambda ind: ind.fitness)
-        print(
-            "Best individual is %s, %s" % (self.best_ind, self.best_ind.fitness)
-        )
-        self.get_final_scores(pop, fits)
-
-        return pop
-
-    def save_fitness_in_generation(self, file_name: str):
-        """
-            Save fitness in each generation in a file
-        """
-        joblib.dump(self.fitness_in_generation, file_name)
+if __name__ == "__main__":
+    env = Env()
+    ga = FeatureSelectionGA(env, verbose = 1)
+    ga.generate(n_pop = 200, cxpb = 0.8, mutxpb = 0.1, ngen = 100)
+    ga.save_dominants_buffer('dominants_buffer.pkl')
