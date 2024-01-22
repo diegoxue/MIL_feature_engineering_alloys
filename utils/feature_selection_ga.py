@@ -138,7 +138,8 @@ def select(population: List[Individual], k: int) -> List[Individual]:
     probabilities = [individual.fitness / fitness_sum for individual in population]
     ''' fitness defined as r2 can be negative, need to normalize it to [0, 1] '''
     probabilities = softmax(probabilities)
-    return random.choices(population, weights = probabilities, k = k)
+    sel_idx = np.random.choice(len(population), size = k, replace = False, p = probabilities)
+    return [population[i] for i in sel_idx]
 
 def mutate(parent: Individual, mutation_prob: float, total_f_num: int) -> Individual:
     """
