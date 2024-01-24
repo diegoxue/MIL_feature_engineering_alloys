@@ -90,11 +90,12 @@ D_N = 8
 
 class Env:
     '''
-        Environment for feature selection of strain data.
+        Environment for feature generation.
     '''
     def __init__(self) -> None:
         '''
             Environment initialization.
+
             NOTE: FOR USERS, The first 5 lines can be modified according to specific purpose.
         '''
         initial_dataset_path = 'Strain_final_118_checked_by_Xue_20240110.xlsx'
@@ -166,12 +167,21 @@ class Env:
         return fitness
 
 class Individual:
+    '''
+        Individual in the population of Genetic Algorithm.
+    '''
     def __init__(self, elem_f_arr: np.ndarray):
         self.elem_f_arr = elem_f_arr
         self.fitness = None
 
 def init_individual() -> Individual:
-    elem_f_arr = np.random.randint(-128, 127, size = (G_F_N, E_N), dtype = np.int8)
+    """
+        Initializes an individual with randomly generated features.
+
+        Returns:
+            Individual: The initialized individual.
+    """
+    elem_f_arr = np.random.randint(-128, 127, size=(G_F_N, E_N), dtype=np.int8)
     return Individual(elem_f_arr)
 
 def softmax(x: List[float]) -> np.ndarray:
@@ -266,7 +276,7 @@ class FeatureGenrationGA:
         """
         Parameters
         -----------
-        ff_obj: {object}, environment for feature selection
+        ff_obj: {object}, environment for feature generation
         verbose: 0 or 1
         """
         self.verbose = verbose
