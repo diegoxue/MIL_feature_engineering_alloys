@@ -247,10 +247,10 @@ def elitism_replacement(population: List[Individual], offspring: List[Individual
     combined.sort(key = lambda ind: ind.fitness, reverse = True)
     return combined[:len(population)]
 
-class FeatureSelectionGA:
+class FeatureGenrationGA:
     """
-        FeaturesSelectionGA
-        This class uses Genetic Algorithm to find out the best features for the given data.
+        FeatureGenrationGA
+        This class uses Genetic Algorithm to syhtetically generate features for the given data.
 
         遗传算法通常包含以下几个阶段:
         初始化(Initialization):创建一个初始种群。这个种群通常是随机生成的。
@@ -386,6 +386,6 @@ class FeatureSelectionGA:
 if __name__ == "__main__":
     ''' in-file test '''
     env = Env()
-    ga = FeatureSelectionGA(env, verbose = 1)
+    ga = FeatureGenrationGA(env, verbose = 1)
     ga.generate(n_pop = 200, cxpb = 0.8, mutxpb = 0.1, ngen = 50)
     ga.save_dominants_buffer('dominants_buffer.pkl')
